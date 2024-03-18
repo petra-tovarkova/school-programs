@@ -18,3 +18,13 @@ for i in range(n):
 
     print()
 print()
+
+maximum = matice[0][0]
+souradnice = (0,0)
+
+for i in range(n):
+    for j in range(m):
+        if matice[i][j] > maximum:
+            minimum = matice[i][j]
+            souradnice = (i,j)
+
