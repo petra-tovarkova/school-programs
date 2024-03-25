@@ -22,6 +22,6 @@ for radek in seznam:
 
 print("Studenti studující 3. a 4. semestr:")
 for radek in seznam:
-    if (radek[2] == 3 or 4):
+    if (radek[2] == 3) or  (radek[2] == 4):
         print(radek[0], radek[1])
-    
+
