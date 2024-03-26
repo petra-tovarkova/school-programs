@@ -1,20 +1,20 @@
-def code(string, shift):
+#task a
+def caesar(string, shift):
     result = ""
     for character in string:
-        if "A" <= character <= "Z":
-            number = ord(character) + shift
-            while number > ord("Z"):
-                number -= 26
-            result += chr(number)
-        elif "a" <= character <= "z":
-            number = ord(character) + shift
-            while number > ord("Z"):
-                number -= 26
-            result += chr(number)
+        if ord("A") <= character <= ord("a"):
+            x = ord(character) + shift
+            if x > ord("Z"):
+               x -= 26
+            result += chr(x)
         else:
             result += character
     return(result)
 
+#task b
+
+
+#task c
 string = input("Zadejte text, který chcete (de)kódovat:")
 shift = int(input("Zdejte posun:"))
 choice = 0
@@ -27,3 +27,18 @@ while choice != 1 and choice != 2:
     if choice == 2:
         result = decode(string, shift)
 print(result)
+
+#task d
+
+
+#task e
+posun = input("Zadejte posun:")
+p = 0
+for i in range(len(posun)):
+    p += int(posun[i])
+if p >= 10:
+    posun = str(p)
+    p = int(posun[0]) + int(posun[1])
+print(p)
+
+#task f
