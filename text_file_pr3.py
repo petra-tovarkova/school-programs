@@ -19,11 +19,19 @@ for slovo in slova:
 
 nejvice = max(oznam_vet, rozkaz_vet, tazaci_vet)
 if nejvice == oznam_vet:
-    print("Nejvíce je vět oznamovacích. Je jich", oznam_vet)
+    print("Nejvíce je vět oznamovacích. Je jich", oznam_vet, ".")
 elif nejvice == rozkaz_vet:
-    print("Nejvíce je vět rozkazovacích. Je jich", rozkaz_vet)
+    print("Nejvíce je vět rozkazovacích. Je jich", rozkaz_vet, ".")
 elif nejvice == tazaci_vet:
-    print("Nejvíce je vět tázacích. Je jich", tazaci_vet)
+    print("Nejvíce je vět tázacích. Je jich", tazaci_vet, ".")
+elif oznam_vet == rozkaz_vet:
+    print("Je stejný počet vět oznamovacích a rozkazovacích. Je jich", oznam_vet, ".")
+elif oznam_vet == tazaci_vet:
+    print("Je stejný počet vět tazacích a oznamovacích. Je jich", tazaci_vet, ".")
+elif tazaci_vet == rozkaz_vet:
+    print("Je stejný počet vět tazacích a rozkazovacích. Je jich", tazaci_vet, ".")
+elif tazaci_vet == rozkaz_vet == oznam_vet:
+    print("Je stejný počet vět tázacích, oznamovacích i rozkazovacích vět. Je jich", oznam_vet, ".")
 
 #task b
 opraveny_text = ""
