@@ -1,4 +1,4 @@
-with open ("Dokument1.txt", encoding="utf-8") as file:
+with open (name="Dokument1.txt", encoding="utf-8") as file:
     text = file.read()
 slova = text.split()
 oznam = "."
@@ -34,14 +34,23 @@ elif tazaci_vet == rozkaz_vet == oznam_vet:
     print("Je stejný počet vět tázacích, oznamovacích i rozkazovacích vět. Je jich", oznam_vet, ".")
 
 #task b
-opraveny_text = ""
+opraveny_text = file
 for slovo in slova:
-    if "hi" in slovo or "Hi" in slovo or "hí" in slovo or "Hí" in slovo:
+    if ("hi" in slovo or "Hi" in slovo) or ("hí" in slovo or "Hí" in slovo):
+        slovoo = slovo
         nove = slovo.replace("i", "y")
         novee = nove.replace("í", "ý")
-        opraveny_text += novee + " "
-    else:
-        opraveny_text += slovo + " "
+        opraveny_text = text.replace(slovoo, novee)
 
-with open("Oprava.txt", mode="a", encoding="utf-8") as f:
-    f.write(opraveny_text)
+with open ("Oprava.txt", mode="w", encoding="utf-8") as f:
+    print(opraveny_text)
+    
+
+#task c
+with open (name="Dokument1.txt", encoding="utf-8") as file:
+    text = file.read()
+if slovo[0] == [A-Z]:
+    seznam = []
+    slovo.append(seznam)
+    print(seznam)
+
