@@ -1,0 +1,17 @@
+class Human:
+    def __init__(self, name, age): #init je inializační metoda = konstruktor
+        self.name = name
+        self.age = age
+        
+    def introduce(self):
+        print("Jmenunuji se", self.name, "a je mi", self.age,".")
+
+    def year_of_birthday(self, rok):
+        return(self.rok = 2024 - self.age)
+        
+"""
+   homer.rok = 20024-homer.age #vytvori rok narozeni homera, ale neprida ho do tridy
+   homer.name
+   homer.vek
+
+"""
