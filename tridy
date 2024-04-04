@@ -6,8 +6,9 @@ class Human:
     def introduce(self):
         print("Jmenunuji se", self.name, "a je mi", self.age,".")
 
-    def year_of_birthday(self, rok):
-        return(self.rok = 2024 - self.age)
+    def year_of_birthday(self):
+        self.rok = 2024 - self.age
+        print(self.rok)
         
 """
    homer.rok = 20024-homer.age #vytvori rok narozeni homera, ale neprida ho do tridy
