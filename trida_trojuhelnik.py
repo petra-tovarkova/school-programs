@@ -21,10 +21,16 @@ class Triangle:
         o = self.a + self.b + self.c
         return o
     
+    def right(self):
+        if self.a**2 + self.b**2 == self.c**2:
+            return True
+        else:
+            return False
+        
     def sharpness(self):
         self.degrees()
         if self.a**2 + self.b**2 == self.c**2:
-            print("TRiangle is right.")
+            print("Triangle is right.")
         elif (self.alpha > 90) or (self.beta > 90) or (self.gama > 90):
             print("Triangle is obtuse.")
         elif (self.alpha < 90) and (self.beta < 90) and (self.gama < 90):
