@@ -15,7 +15,12 @@ class Triangle:
 
 #task b 
     def right(self):
-        if self.a**2 + self.b**2 == self.c**2:
+        cisla = [self.a, self.b, self.c]
+        cisla.sort()
+        odvesna1 = cisla[0]
+        odvesna2 = cisla[1]
+        prepona = cisla[2]
+        if odvesna1**2 + odvesna2**2 == prepona**2:
             return True
         else:
             return False
@@ -43,19 +48,32 @@ class Triangle:
 
 #task f
     def radius_of_circumscribed(self):
-        r = (self.a*self.b*self.c)/4(self.content())
+        r = (self.a*self.b*self.c)/(4*(self.content()))
         return r
+    
+
+#task g
+    def radius_of_inscribed(self):
+        p = self.a + self.b + self.c
+        r = math.sqrt(((p - self.a)*(p - self.b)*(p - self.c))/p)
+
 
 #task i
     def degrees(self):
-        alpha = math.degrees(math.acos(self.b**2 + self.c**2 - self.a**2)/(2*self.b*self.c))
-        beta = math.degrees(math.acos(self.c**2 + self.a**2 - self.b**2)/(2*self.c*self.a))
-        gama = math.degrees(math.acos(self.a**2 + self.b**2 - self.c**2)/(2*self.a*self.b))
+        alpha = math.degrees(math.acos((self.b**2 + self.c**2 - self.a**2)/(2*self.b*self.c)))
+        beta = math.degrees(math.acos((self.c**2 + self.a**2 - self.b**2)/(2*self.c*self.a)))
+        gama = math.degrees(math.acos((self.a**2 + self.b**2 - self.c**2)/(2*self.a*self.b)))
         return alpha, beta, gama
-#task 
+    
+#task j
     def sharpness(self):
         self.degrees()
-        if self.a**2 + self.b**2 == self.c**2:
+        cisla = [self.a, self.b, self.c]
+        cisla.sort()
+        odvesna1 = cisla[0]
+        odvesna2 = cisla[1]
+        prepona = cisla[2]
+        if odvesna1**2 + odvesna2**2 == prepona**2:
             print("Triangle is right.")
         elif (self.alpha > 90) or (self.beta > 90) or (self.gama > 90):
             print("Triangle is obtuse.")
