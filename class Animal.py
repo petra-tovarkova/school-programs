@@ -20,3 +20,7 @@ class Snake(Animal):
 class Carp(Animal):
     def make_sound(self):
         print("......:", self.name)
+
+zoo = [Dog("Azor"), Kitty("Micina"), Snake("Python"), Carp("Bubla")
+for z in zoo:
+    z.make_sound()
