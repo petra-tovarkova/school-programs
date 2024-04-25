@@ -17,7 +17,15 @@ class Zamestnanec:
 class Manažer(Zamestnanec):
     def __init__(self, jmeno, pozice, pocet_podrizenych):
         super().__init__(jmeno, pozice)
-        self.pocet_podrizenych = pocet_podrizenych
+        self.podrizeni = []
 
+    def pridej_podrizeneho(self, podrizeny):
+        self.podrizeny.append(podrizeny)
+
+    def vypis_podrizenych(self):
+        for i in self.podrizeni:
+            print(i.jmeno)
+    
     def __str__(self):
         return super().__str__() + "a má" + str(self.pocet_podrizenych) + "podřízených."
+
