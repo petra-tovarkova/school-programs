@@ -1,0 +1,507 @@
+pip install numpy scipy tkinterdnd2 matplotlib
+
+
+import os
+import threading
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import numpy as np
+from scipy.io import wavfile
+from scipy.signal import butter, filtfilt, hilbert
+from tkinterdnd2 import DND_FILES, TkinterDnD
+
+import matplotlib
+matplotlib.use("TkAgg")
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+
+# ==============================================================================
+# 1. MORSEOVKA SLOVNÍK
+# ==============================================================================
+MORSE_DICT = {
+    '.-': 'A', '-...': 'B', '-.-.': 'C', '-..': 'D', '.': 'E',
+    '..-.': 'F', '--.': 'G', '....': 'H', '..': 'I', '.---': 'J',
+    '-.-': 'K', '.-..': 'L', '--': 'M', '-.': 'N', '---': 'O',
+    '.--.': 'P', '--.-': 'Q', '.-.': 'R', '...': 'S', '-': 'T',
+    '..-': 'U', '...-': 'V', '.--': 'W', '-..-': 'X', '-.--': 'Y',
+    '--..': 'Z',
+    '-----': '0', '.----': '1', '..---': '2', '...--': '3', '....-': '4',
+    '.....': '5', '-....': '6', '--...': '7', '---..': '8', '----.': '9',
+    '.-.-.-': '.', '--..--': ',', '..--..': '?', '.----.': "'",
+    '-.-.--': '!', '-..-.': '/', '-.--.': '(', '-.--.-': ')',
+    '.-...': '&', '---...': ':', '-.-.-.': ';', '-...-': '=',
+    '.-.-.': '+', '-....-': '-', '..--.-': '_', '.-..-.': '"',
+    '...-..-': '$', '.--.-.': '@', '...-.-': '[SK]', '.-.-.': '[AR]'
+}
+
+
+# ==============================================================================
+# 2. DSP ZPRACOVÁNÍ SIGNÁLU A DEKÓDOVÁNÍ
+# ==============================================================================
+class MorseDSPDecoder:
+    def __init__(self, log_callback=None):
+        self.log = log_callback if log_callback else print
+
+    def otsu_threshold(self, signal):
+        """Automatický výpočet prahu mezi šumem a signálem pomocí Otsuovy metody."""
+        s_min, s_max = np.min(signal), np.max(signal)
+        if s_max - s_min < 1e-9:
+            return s_min
+        norm_sig = ((signal - s_min) / (s_max - s_min) * 255).astype(np.uint8)
+
+        hist, _ = np.histogram(norm_sig, bins=256, range=(0, 256))
+        total = norm_sig.size
+        current_max, threshold = 0, 0
+        sum_total = np.dot(np.arange(256), hist)
+        sum_b, weight_b = 0.0, 0.0
+
+        for i in range(256):
+            weight_b += hist[i]
+            if weight_b == 0:
+                continue
+            weight_f = total - weight_b
+            if weight_f == 0:
+                break
+            sum_b += i * hist[i]
+            mean_b = sum_b / weight_b
+            mean_f = (sum_total - sum_b) / weight_f
+            var_between = weight_b * weight_f * (mean_b - mean_f) ** 2
+            if var_between > current_max:
+                current_max = var_between
+                threshold = i
+
+        return s_min + (threshold / 255.0) * (s_max - s_min)
+
+    def process_iq(self, fs, data, manual_freq=None):
+        """Zpracování komplexního IQ signálu (2 kanály: I=levý, Q=pravý)."""
+        if data.ndim != 2 or data.shape[1] < 2:
+            raise ValueError("IQ nahrávka musí mít 2 kanály (I a Q)!")
+
+        iq = data[:, 0].astype(np.float64) + 1j * data[:, 1].astype(np.float64)
+        iq -= np.mean(iq)
+
+        # Výpočet spektra pro detekci i pro vykreslení v grafu
+        n_fft = min(len(iq), fs * 10)
+        window = np.hanning(n_fft)
+        fft_vals = np.fft.fftshift(np.fft.fft(iq[:n_fft] * window))
+        freqs = np.fft.fftshift(np.fft.fftfreq(n_fft, d=1.0 / fs))
+        spectrum_mag = np.abs(fft_vals)
+
+        if manual_freq is not None:
+            carrier_freq = manual_freq
+            self.log(f"[IQ DSP] Použita ručně zadaná nosná: {carrier_freq:.1f} Hz")
+        else:
+            # Ignorujeme těsné okolí 0 Hz (DC spike SDR přijímače)
+            search_spec = spectrum_mag.copy()
+            search_spec[np.abs(freqs) < 50.0] = 0
+            carrier_freq = freqs[np.argmax(search_spec)]
+            self.log(f"[IQ DSP] Automaticky detekovaná nosná: {carrier_freq:.1f} Hz")
+
+        # Frekvenční posun nosné na 0 Hz (Baseband)
+        t = np.arange(len(iq)) / fs
+        baseband = iq * np.exp(-1j * 2 * np.pi * carrier_freq * t)
+
+        # Dolní propust (Low-pass filter +- 200 Hz)
+        bw = 200.0
+        nyq = 0.5 * fs
+        cutoff = min(bw / nyq, 0.99)
+        b, a = butter(4, cutoff, btype='low')
+        filtered_bb = filtfilt(b, a, baseband)
+
+        envelope = np.abs(filtered_bb)
+        spec_db = 20 * np.log10(spectrum_mag + 1e-12)
+        return envelope, freqs, spec_db, carrier_freq, bw
+
+    def process_audio(self, fs, data, manual_freq=None):
+        """Zpracování klasického audio signálu."""
+        if data.ndim == 2:
+            audio = np.mean(data, axis=1).astype(np.float64)
+        else:
+            audio = data.astype(np.float64)
+
+        audio -= np.mean(audio)
+
+        n_fft = min(len(audio), fs * 10)
+        window = np.hanning(n_fft)
+        fft_vals = np.fft.rfft(audio[:n_fft] * window)
+        freqs = np.fft.rfftfreq(n_fft, d=1.0 / fs)
+        spectrum_mag = np.abs(fft_vals)
+
+        if manual_freq is not None:
+            tone_freq = manual_freq
+            self.log(f"[Audio DSP] Použit ručně zadaný tón: {tone_freq:.1f} Hz")
+        else:
+            valid_mask = (freqs >= 300.0) & (freqs <= 3000.0)
+            search_spec = np.where(valid_mask, spectrum_mag, 0)
+            tone_freq = freqs[np.argmax(search_spec)]
+            self.log(f"[Audio DSP] Automaticky detekovaný tón: {tone_freq:.1f} Hz")
+
+        # Pásmová propust (+- 120 Hz kolem detekovaného tónu)
+        bw = 120.0
+        nyq = 0.5 * fs
+        low = max((tone_freq - bw) / nyq, 0.001)
+        high = min((tone_freq + bw) / nyq, 0.99)
+        b, a = butter(4, [low, high], btype='band')
+        filtered_audio = filtfilt(b, a, audio)
+
+        analytic_signal = hilbert(filtered_audio)
+        envelope = np.abs(analytic_signal)
+        spec_db = 20 * np.log10(spectrum_mag + 1e-12)
+        return envelope, freqs, spec_db, tone_freq, bw
+
+    def decode_wav(self, filepath, mode="audio", manual_freq=None):
+        self.log(f"--- Načítám: {os.path.basename(filepath)} ({mode.upper()}) ---")
+        fs, data = wavfile.read(filepath)
+        self.log(f"[Info] Fs: {fs} Hz | Délka: {len(data)/fs:.2f} s")
+
+        if mode == "iq":
+            envelope, freqs, spec_db, center_freq, bw = self.process_iq(fs, data, manual_freq)
+        else:
+            envelope, freqs, spec_db, center_freq, bw = self.process_audio(fs, data, manual_freq)
+
+        # Decimace na ~1000 Hz pro rychlou analýzu a vykreslení
+        target_fs = 1000
+        decimation_factor = max(1, int(fs // target_fs))
+        env_ds = envelope[::decimation_factor]
+        effective_fs = fs / decimation_factor
+
+        # Vyhlazení klouzavým průměrem (10 ms)
+        win_len = max(1, int(0.010 * effective_fs))
+        env_smooth = np.convolve(env_ds, np.ones(win_len) / win_len, mode='same')
+        time_axis = np.arange(len(env_smooth)) / effective_fs
+
+        # Otsuovo prahování
+        thresh = self.otsu_threshold(env_smooth)
+        binary_signal = env_smooth > thresh
+
+        # Balíček dat pro vykreslení v GUI
+        plot_data = {
+            "mode": mode,
+            "freqs": freqs,
+            "spec_db": spec_db,
+            "center_freq": center_freq,
+            "bw": bw,
+            "time": time_axis,
+            "envelope": env_smooth,
+            "threshold": thresh,
+            "binary": binary_signal
+        }
+
+        # Run-Length Encoding (RLE)
+        changes = np.diff(binary_signal.astype(int))
+        idx = np.where(changes != 0)[0] + 1
+        splits = np.concatenate(([0], idx, [len(binary_signal)]))
+
+        durations = np.diff(splits) / effective_fs
+        states = binary_signal[splits[:-1]]
+
+        valid_tones = [d for d, s in zip(durations, states) if s and d > 0.015]
+        if not valid_tones:
+            return "[Chyba: V nahrávce nebyl detekován žádný čitelný signál.]", plot_data
+
+        # Odhad délky tečky (2-means shlukování)
+        tones_arr = np.array(valid_tones)
+        c1, c2 = np.percentile(tones_arr, 25), np.percentile(tones_arr, 75)
+        for _ in range(10):
+            g1 = tones_arr[np.abs(tones_arr - c1) < np.abs(tones_arr - c2)]
+            g2 = tones_arr[np.abs(tones_arr - c1) >= np.abs(tones_arr - c2)]
+            if len(g1) > 0: c1 = np.mean(g1)
+            if len(g2) > 0: c2 = np.mean(g2)
+
+        t_dot = (c1 + (c2 / 3.0)) / 2.0 if c2 > 1.8 * c1 else c1
+        wpm = 1.2 / t_dot
+        self.log(f"[Timing] Tečka: {t_dot*1000:.1f} ms (~{wpm:.1f} WPM)")
+
+        # Dekódování symbolů
+        morse_chars = []
+        current_symbol = ""
+
+        for dur, is_tone in zip(durations, states):
+            if dur < 0.015:
+                continue
+            if is_tone:
+                current_symbol += "." if dur < 2.0 * t_dot else "-"
+            else:
+                if dur < 2.0 * t_dot:
+                    pass
+                elif dur < 5.0 * t_dot:
+                    if current_symbol:
+                        morse_chars.append(current_symbol)
+                        current_symbol = ""
+                else:
+                    if current_symbol:
+                        morse_chars.append(current_symbol)
+                        current_symbol = ""
+                    morse_chars.append("/")
+
+        if current_symbol:
+            morse_chars.append(current_symbol)
+
+        raw_morse = " ".join(morse_chars)
+        self.log(f"[Morse] {raw_morse}")
+
+        decoded_text = []
+        for code in morse_chars:
+            if code == "/":
+                decoded_text.append(" ")
+            else:
+                decoded_text.append(MORSE_DICT.get(code, f"[{code}?]"))
+
+        result = " ".join("".join(decoded_text).split())
+        return result, plot_data
+
+
+# ==============================================================================
+# 3. GRAFICKÉ UŽIVATELSKÉ ROZHRANÍ (GUI + DRAG & DROP + MATPLOTLIB)
+# ==============================================================================
+class MorseApp(TkinterDnD.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("CW / Morse Dekodér + DSP Analyzátor (Audio & IQ WAV)")
+        self.geometry("1150x750")
+        self.configure(padx=12, pady=12)
+
+        self.mode_var = tk.StringVar(value="audio")
+        self.manual_freq_var = tk.StringVar(value="")
+        self.current_file = None
+        self.decoder = MorseDSPDecoder(log_callback=self.log_message)
+
+        self._build_ui()
+
+    def _build_ui(self):
+        # Hlavní rozdělení na levý panel (ovládání + text) a pravý panel (grafy)
+        main_paned = ttk.PanedWindow(self, orient="horizontal")
+        main_paned.pack(fill="both", expand=True)
+
+        left_frame = ttk.Frame(main_paned, width=430)
+        right_frame = ttk.Frame(main_paned)
+        main_paned.add(left_frame, weight=1)
+        main_paned.add(right_frame, weight=2)
+
+        # ================= LEVÝ PANEL =================
+        # 1. Nastavení vstupu
+        cfg_frame = ttk.LabelFrame(left_frame, text="1. Nastavení signálu", padding=8)
+        cfg_frame.pack(fill="x", pady=(0, 8))
+
+        rb_frame = ttk.Frame(cfg_frame)
+        rb_frame.pack(fill="x")
+        ttk.Radiobutton(
+            rb_frame, text="Audio WAV (Mono/Stereo)",
+            variable=self.mode_var, value="audio", command=self.reprocess_if_loaded
+        ).pack(side="left", padx=(0, 12))
+        ttk.Radiobutton(
+            rb_frame, text="IQ WAV (SDR I+Q)",
+            variable=self.mode_var, value="iq", command=self.reprocess_if_loaded
+        ).pack(side="left")
+
+        freq_frame = ttk.Frame(cfg_frame)
+        freq_frame.pack(fill="x", pady=(8, 0))
+        ttk.Label(freq_frame, text="Ruční frekvence [Hz] (volitelné):").pack(side="left")
+        freq_entry = ttk.Entry(freq_frame, textvariable=self.manual_freq_var, width=10)
+        freq_entry.pack(side="left", padx=6)
+        freq_entry.bind("<Return>", lambda e: self.reprocess_if_loaded())
+        ttk.Button(freq_frame, text="Přepočítat", command=self.reprocess_if_loaded).pack(side="left")
+
+        # 2. Drag & Drop zóna
+        self.drop_frame = tk.Frame(
+            left_frame, bg="#eef2f7", bd=2, relief="groove", height=95, cursor="hand2"
+        )
+        self.drop_frame.pack(fill="x", pady=(0, 8))
+        self.drop_frame.pack_propagate(False)
+
+        self.drop_label = tk.Label(
+            self.drop_frame,
+            text="Přetáhněte sem WAV soubor (Drag & Drop)\nnebo klikněte pro výběr z disku",
+            bg="#eef2f7", fg="#334155", font=("Segoe UI", 10, "bold")
+        )
+        self.drop_label.pack(expand=True)
+
+        self.drop_frame.drop_target_register(DND_FILES)
+        self.drop_frame.dnd_bind('<<Drop>>', self.on_drop)
+        self.drop_frame.bind("<Button-1>", self.on_click_browse)
+        self.drop_label.bind("<Button-1>", self.on_click_browse)
+
+        # 3. Dekódovaný text
+        out_frame = ttk.LabelFrame(left_frame, text="2. Dekódovaná zpráva", padding=8)
+        out_frame.pack(fill="both", expand=True, pady=(0, 8))
+
+        self.result_text = tk.Text(
+            out_frame, height=6, font=("Consolas", 13, "bold"),
+            wrap="word", bg="#ffffff", fg="#0f172a"
+        )
+        self.result_text.pack(fill="both", expand=True)
+
+        # 4. Log konzole
+        log_frame = ttk.LabelFrame(left_frame, text="3. DSP Log (zapisuje se i do konzole)", padding=8)
+        log_frame.pack(fill="both", expand=True)
+
+        self.log_text = tk.Text(
+            log_frame, height=8, font=("Consolas", 8),
+            wrap="word", bg="#1e293b", fg="#cbd5e1", state="disabled"
+        )
+        self.log_text.pack(fill="both", expand=True)
+
+        # ================= PRAVÝ PANEL (MATPLOTLIB) =================
+        plot_frame = ttk.LabelFrame(right_frame, text="4. Vizualizace spektra a obálky signálu", padding=6)
+        plot_frame.pack(fill="both", expand=True, padx=(8, 0))
+
+        self.fig = Figure(figsize=(6.5, 6), dpi=100)
+        self.fig.subplots_adjust(hspace=0.38, left=0.10, right=0.97, top=0.93, bottom=0.08)
+
+        self.ax_spec = self.fig.add_subplot(211)
+        self.ax_env = self.fig.add_subplot(212)
+
+        self._init_empty_plots()
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        toolbar_frame = ttk.Frame(plot_frame)
+        toolbar_frame.pack(fill="x")
+        self.toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
+        self.toolbar.update()
+
+    def _init_empty_plots(self):
+        self.ax_spec.set_title("Frekvenční spektrum (FFT) a detekovaná nosná", fontsize=10, fontweight="bold")
+        self.ax_spec.set_xlabel("Frekvence [Hz]", fontsize=9)
+        self.ax_spec.set_ylabel("Výkon [dB]", fontsize=9)
+        self.ax_spec.grid(True, alpha=0.3)
+
+        self.ax_env.set_title("Obálka signálu, Otsuův práh a klíčování (0/1)", fontsize=10, fontweight="bold")
+        self.ax_env.set_xlabel("Čas [s]", fontsize=9)
+        self.ax_env.set_ylabel("Amplituda", fontsize=9)
+        self.ax_env.grid(True, alpha=0.3)
+
+    def update_plots(self, pdata):
+        """Vykreslí spektrum a prahovanou obálku do Matplotlib canvasu."""
+        self.ax_spec.clear()
+        self.ax_env.clear()
+
+        # --- 1. Horní graf: Spektrum ---
+        freqs = pdata["freqs"]
+        spec_db = pdata["spec_db"]
+        cf = pdata["center_freq"]
+        bw = pdata["bw"]
+
+        # Pro přehlednost zdecimujeme body spektra, pokud jich je příliš mnoho (> 15000)
+        step = max(1, len(freqs) // 15000)
+        self.ax_spec.plot(freqs[::step], spec_db[::step], color="#2563eb", linewidth=0.8, label="Spektrum")
+        self.ax_spec.axvline(cf, color="#dc2626", linestyle="--", linewidth=1.3, label=f"Nosná: {cf:.1f} Hz")
+        self.ax_spec.axvspan(cf - bw, cf + bw, color="#22c55e", alpha=0.22, label=f"Pásmo filtru (±{bw:.0f} Hz)")
+
+        # Zoom kolem detekované nosné, aby byl signál dobře vidět
+        if pdata["mode"] == "audio":
+            self.ax_spec.set_xlim(0, min(4000, freqs[-1]))
+        else:
+            span = max(3000, abs(cf) * 1.5 + 1000)
+            self.ax_spec.set_xlim(max(freqs[0], cf - span), min(freqs[-1], cf + span))
+
+        self.ax_spec.set_title("Frekvenční spektrum (FFT) a pásmo filtru", fontsize=10, fontweight="bold")
+        self.ax_spec.set_xlabel("Frekvence [Hz]", fontsize=9)
+        self.ax_spec.set_ylabel("Relativní úroveň [dB]", fontsize=9)
+        self.ax_spec.grid(True, alpha=0.3)
+        self.ax_spec.legend(loc="upper right", fontsize=8)
+
+        # --- 2. Dolní graf: Obálka a Otsuův práh ---
+        t = pdata["time"]
+        env = pdata["envelope"]
+        thresh = pdata["threshold"]
+        binary = pdata["binary"]
+
+        self.ax_env.plot(t, env, color="#0284c7", linewidth=1.0, label="Vyhlazená obálka")
+        self.ax_env.axhline(thresh, color="#dc2626", linestyle="--", linewidth=1.3, label=f"Otsu práh ({thresh:.1f})")
+
+        # Vykreslení obdélníkového průběhu detekovaných pulzů (škálováno na 90 % maxima obálky)
+        max_env = np.max(env) if np.max(env) > 0 else 1.0
+        self.ax_env.fill_between(
+            t, 0, binary.astype(float) * max_env * 0.9,
+            color="#f59e0b", alpha=0.28, step="mid", label="Detekovaný tón (0/1)"
+        )
+
+        # Zobrazíme max prvních 15 sekund pro čitelnost (zbytek lze posouvat lupou/panem)
+        self.ax_env.set_xlim(0, min(t[-1], 15.0))
+        self.ax_env.set_title("Obálka signálu a prahování (použijte lupu dole pro detail)", fontsize=10, fontweight="bold")
+        self.ax_env.set_xlabel("Čas [s]", fontsize=9)
+        self.ax_env.set_ylabel("Amplituda", fontsize=9)
+        self.ax_env.grid(True, alpha=0.3)
+        self.ax_env.legend(loc="upper right", fontsize=8)
+
+        self.canvas.draw()
+
+    def log_message(self, msg):
+        print(msg)
+        self.after(0, self._append_gui_log, msg)
+
+    def _append_gui_log(self, msg):
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", msg + "\n")
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    def on_click_browse(self, event=None):
+        filepath = filedialog.askopenfilename(
+            title="Vyberte WAV nahrávku",
+            filetypes=[("WAV soubory", "*.wav"), ("Všechny soubory", "*.*")]
+        )
+        if filepath:
+            self.load_and_decode(filepath)
+
+    def on_drop(self, event):
+        raw_path = event.data.strip()
+        if raw_path.startswith("{") and raw_path.endswith("}"):
+            raw_path = raw_path[1:-1]
+        self.load_and_decode(raw_path)
+
+    def get_manual_freq(self):
+        val = self.manual_freq_var.get().strip()
+        if not val:
+            return None
+        try:
+            return float(val.replace(",", "."))
+        except ValueError:
+            messagebox.showwarning("Chybná frekvence", "Zadejte platné číslo v Hz (např. 750 nebo -4200).")
+            return None
+
+    def reprocess_if_loaded(self):
+        if self.current_file and os.path.exists(self.current_file):
+            self.load_and_decode(self.current_file)
+
+    def load_and_decode(self, filepath):
+        if not filepath.lower().endswith(".wav"):
+            messagebox.showwarning("Neplatný formát", "Prosím vložte soubor ve formátu .WAV")
+            return
+
+        manual_freq = self.get_manual_freq()
+        self.current_file = filepath
+        self.drop_label.config(text=f"Načteno: {os.path.basename(filepath)}\n(Přetáhněte jiný nebo klikněte pro změnu)")
+
+        self.result_text.delete("1.0", "end")
+        self.result_text.insert("1.0", "Zpracovávám signál a vykresluji grafy...")
+
+        mode = self.mode_var.get()
+        threading.Thread(target=self._run_worker, args=(filepath, mode, manual_freq), daemon=True).start()
+
+    def _run_worker(self, filepath, mode, manual_freq):
+        try:
+            decoded, plot_data = self.decoder.decode_wav(filepath, mode=mode, manual_freq=manual_freq)
+            print(f"\n>>> VÝSLEDEK DEKÓDOVÁNÍ:\n{decoded}\n" + "=" * 40 + "\n")
+            self.after(0, self._update_ui_success, decoded, plot_data)
+        except Exception as e:
+            err_msg = f"Chyba při zpracování: {str(e)}"
+            self.log_message(f"[ERROR] {err_msg}")
+            self.after(0, self._update_result_only, err_msg)
+
+    def _update_ui_success(self, text, plot_data):
+        self.result_text.delete("1.0", "end")
+        self.result_text.insert("1.0", text)
+        self.update_plots(plot_data)
+
+    def _update_result_only(self, text):
+        self.result_text.delete("1.0", "end")
+        self.result_text.insert("1.0", text)
+
+
+if __name__ == "__main__":
+    app = MorseApp()
+    app.mainloop()
